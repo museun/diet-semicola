@@ -30,10 +30,10 @@ fn main() {
             )
             .next()
         })
-        .map(|config| {
+        .and_then(|config| {
             std::net::TcpStream::connect("irc.chat.twitch.tv:6667")
                 .ok()
-                .map(|stream| {
+                .and_then(|stream| {
                     [
                         ("DSC_PASS", "PASS"),
                         ("DSC_NICK", "NICK"),
@@ -52,23 +52,18 @@ fn main() {
                             )
                             .as_bytes(),
                         )
-                        .ok()
                     })
-                    .flat_map(|_| std::io::Write::flush(&mut &stream).ok())
+                    .flat_map(|_| std::io::Write::flush(&mut &stream))
                     .last()
                     .map(|_| stream)
                 })
-                .flatten()
         })
-        .flatten()
-        .into_iter()
-        .next()
-        .map(|stream| {
+        .and_then(|stream| {
             std::io::BufRead::lines(std::io::BufReader::new(&stream))
                 .flatten()
                 .map(|line| {
                     [
-                        (|line, _stream| println!("<< {}", line.escape_debug()))
+                        (|line, _stream| println!(r"<< {}\r\n", line))
                             as fn(&str, &std::net::TcpStream),
                         (|line, mut stream| {
                             line.starts_with("PING")
@@ -77,9 +72,7 @@ fn main() {
                                         &mut stream,
                                         line.replace("PING", "PONG").as_bytes(),
                                     )
-                                    .ok()
                                 })
-                                .flatten()
                                 .map(drop)
                                 .unwrap_or_default()
                         }),
@@ -93,47 +86,52 @@ fn main() {
                                         data,
                                         &[(|line, mut stream| {
                                             std::io::Write::write_all(&mut stream, line.as_bytes())
+                                                .map(|_| {
+                                                    std::io::Write::write_all(&mut stream, b"\r\n")
+                                                })
                                                 .ok()
-                                                .map(drop)
+                                                .map(|_| println!(r">> {}\r\n", line))
                                                 .unwrap_or_default()
                                         })
                                             as fn(&str, &std::net::TcpStream)],
                                     )
                                 })
                                 .and_then(|(data, funcs)| {
-                                    [
+                                    <&[(
+                                        &str,
+                                        fn(
+                                            &str,
+                                            &str,
+                                            &str,
+                                            &std::net::TcpStream,
+                                            &[fn(&str, &std::net::TcpStream)],
+                                        ),
+                                    )]>::into_iter(&[
                                         (
                                             "!hello",
                                             (|channel, nick, _data, stream, funcs| {
                                                 funcs[0](
                                                     &format!(
-                                                        "PRIVMSG {} :{} {}!\r\n",
-                                                        channel, "hello", nick
+                                                        "PRIVMSG {} :hello {}!",
+                                                        channel, nick
                                                     ),
                                                     stream,
                                                 )
-                                            })
-                                                as fn(
-                                                    &str,
-                                                    &str,
-                                                    &str,
-                                                    &std::net::TcpStream,
-                                                    &[fn(&str, &std::net::TcpStream)],
-                                                ),
+                                            }),
                                         ),
                                         (
                                             "!source",
                                             (|channel, nick, _data, stream, funcs| {
                                                 funcs[0](
                                                     &format!(
-                                                        "PRIVMSG {} :{}: {}\r\n",
+                                                        "PRIVMSG {} :{}: {}",
                                                         channel,
                                                         nick,
                                                         "you can view this\
-                                                                    monstrosity^wsimplicity \
-                                                                    at https://github.com/\
-                                                                    museun/diet-semicola/\
-                                                                    blob/main/src/main.rs"
+                                                         monstrosity^wsimplicity \
+                                                         at https://github.com/\
+                                                         museun/diet-semicola/\
+                                                         blob/main/src/main.rs"
                                                     ),
                                                     stream,
                                                 )
@@ -144,47 +142,39 @@ fn main() {
                                             (|channel, nick, _data, stream, funcs| {
                                                 funcs[0](
                                                     &format!(
-                                                        "PRIVMSG {} :{}: {}\r\n",
+                                                        "PRIVMSG {} :{}: {}",
                                                         channel,
                                                         nick,
-                                                        "consider using a\
-                                                                    semicolon here: `\x3b`"
+                                                        "consider using a semicolon here: `\x3b`"
                                                     ),
                                                     stream,
                                                 )
                                             }),
                                         ),
-                                    ]
-                                    .into_iter()
+                                    ])
                                     .flat_map(|(cmd, func)| {
                                         line.split_once('!')
-                                            .map(|(head, _)| {
-                                                head.strip_prefix(':')
-                                                    .map(|nick| {
-                                                        line.find("PRIVMSG ")
-                                                            .map(|index| {
-                                                                line[index + "PRIVMSG ".len()..]
-                                                                    .split_once(' ')
-                                                                    .map(|(head, _)| head)
-                                                            })
-                                                            .flatten()
-                                                            .map(|channel| (nick, channel))
+                                            .and_then(|(head, _)| {
+                                                line.find("PRIVMSG ")
+                                                    .and_then(|index| {
+                                                        line[index + "PRIVMSG ".len()..]
+                                                            .split_once(' ')
+                                                            .map(|(head, _)| head)
                                                     })
-                                                    .flatten()
+                                                    .and_then(|channel| {
+                                                        head.strip_prefix(':')
+                                                            .map(|nick| (nick, channel))
+                                                    })
                                             })
-                                            .flatten()
-                                            .into_iter()
-                                            .next()
-                                            .map(|(nick, channel)| {
+                                            .and_then(|(nick, channel)| {
                                                 data.split_once(' ')
                                                     .map(|(head, _)| head)
                                                     .or(Some(data))
-                                                    .filter(|&head| head == cmd)
+                                                    .filter(|head| head == cmd)
                                                     .map(|_| {
                                                         func(channel, nick, data, &stream, funcs)
                                                     })
                                             })
-                                            .flatten()
                                     })
                                     .last()
                                 })
@@ -200,6 +190,5 @@ fn main() {
                 .map(drop)
                 .last()
         })
-        .flatten()
         .unwrap_or_default()
 }
