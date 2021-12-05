@@ -15,9 +15,9 @@ fn main() {
         .and_then(|_| {
             std::iter::once(
                 [
-                    ("DSC_PASS", Option::<String>::None),
-                    ("DSC_NICK", Option::<String>::None),
-                    ("DSC_CHANNEL", Option::<String>::None),
+                    ("DSC_PASS", None),
+                    ("DSC_NICK", None),
+                    ("DSC_CHANNEL", None),
                 ]
                 .into_iter()
                 .flat_map(|(key, mut val)| {
@@ -96,24 +96,25 @@ fn main() {
                                     })
                                 })
                                 .map(|(nick, channel, data)| {
-                                    (
-                                        nick,
-                                        channel,
-                                        data,
-                                        |raw: &str, mut stream: &std::net::TcpStream| {
-                                            std::io::Write::write_all(&mut stream, raw.as_bytes())
-                                                .map(|_| {
-                                                    std::io::Write::write_all(&mut stream, b"\r\n")
-                                                })
-                                                .map(|_| std::io::Write::flush(&mut stream))
-                                                .map(|_| println!(r">> {}\r\n", raw))
-                                                .ok()
-                                                .unwrap_or_default()
-                                        },
-                                    )
+                                    [("channel", channel), ("nick", nick), ("input", data)]
+                                        .into_iter()
+                                        .map(|(k, v)| (k, std::borrow::Cow::from(v)))
+                                        .collect()
                                 })
-                                .map(|(nick, channel, data, write)| {
-                                    (nick, channel, data, write, {
+                                .map(|obj: std::collections::HashMap<_, _>| {
+                                    (obj, |raw: &str, mut stream: &std::net::TcpStream| {
+                                        std::io::Write::write_all(&mut stream, raw.as_bytes())
+                                            .map(|_| {
+                                                std::io::Write::write_all(&mut stream, b"\r\n")
+                                            })
+                                            .map(|_| std::io::Write::flush(&mut stream))
+                                            .map(|_| println!(r">> {}\r\n", raw))
+                                            .ok()
+                                            .unwrap_or_default()
+                                    })
+                                })
+                                .map(|(obj, write)| {
+                                    (obj, write, {
                                         &[
                                             (|obj, write, stream| {
                                                 obj.get("raw")
@@ -149,7 +150,7 @@ fn main() {
                                         ]
                                     })
                                 })
-                                .and_then(|(nick, channel, data, write, funcs)| {
+                                .and_then(|(obj, write, funcs)| {
                                     <&[(
                                         &str,
                                         for<'s> fn(
@@ -217,20 +218,12 @@ fn main() {
                                         ),
                                     ])
                                     .flat_map(|(cmd, func)| {
-                                        data.split_once(' ')
+                                        obj["input"]
+                                            .split_once(' ')
                                             .map(|(head, _)| head)
-                                            .or(Some(data))
+                                            .or(Some(&*obj["input"]))
                                             .filter(|head| head == cmd)
-                                            .map(|_| {
-                                                [
-                                                    ("channel", channel),
-                                                    ("nick", nick),
-                                                    ("input", data),
-                                                ]
-                                                .into_iter()
-                                                .map(|(k, v)| (k, std::borrow::Cow::from(v)))
-                                                .collect()
-                                            })
+                                            .map(|_| obj.clone())
                                             .map(|obj| func(obj, stream, write, funcs))
                                     })
                                     .last()
