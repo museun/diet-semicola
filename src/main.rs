@@ -81,8 +81,24 @@ fn main() {
                                 .skip_while(|&s| s != "PRIVMSG")
                                 .nth(2)
                                 .and_then(|s| s.strip_prefix(':'))
-                                .map(|data| {
+                                .and_then(|data| {
+                                    line.split_once('!').and_then(|(head, _)| {
+                                        line.find("PRIVMSG ")
+                                            .and_then(|index| {
+                                                line[index + "PRIVMSG ".len()..]
+                                                    .split_once(' ')
+                                                    .map(|(head, _)| head)
+                                            })
+                                            .and_then(|channel| {
+                                                head.strip_prefix(':')
+                                                    .map(|nick| (nick, channel, data))
+                                            })
+                                    })
+                                })
+                                .map(|(nick, channel, data)| {
                                     (
+                                        nick,
+                                        channel,
                                         data,
                                         &[(|line, mut stream| {
                                             std::io::Write::write_all(&mut stream, line.as_bytes())
@@ -96,7 +112,7 @@ fn main() {
                                             as fn(&str, &std::net::TcpStream)],
                                     )
                                 })
-                                .and_then(|(data, funcs)| {
+                                .and_then(|(nick, channel, data, funcs)| {
                                     <&[(
                                         &str,
                                         fn(
@@ -153,28 +169,11 @@ fn main() {
                                         ),
                                     ])
                                     .flat_map(|(cmd, func)| {
-                                        line.split_once('!')
-                                            .and_then(|(head, _)| {
-                                                line.find("PRIVMSG ")
-                                                    .and_then(|index| {
-                                                        line[index + "PRIVMSG ".len()..]
-                                                            .split_once(' ')
-                                                            .map(|(head, _)| head)
-                                                    })
-                                                    .and_then(|channel| {
-                                                        head.strip_prefix(':')
-                                                            .map(|nick| (nick, channel))
-                                                    })
-                                            })
-                                            .and_then(|(nick, channel)| {
-                                                data.split_once(' ')
-                                                    .map(|(head, _)| head)
-                                                    .or(Some(data))
-                                                    .filter(|head| head == cmd)
-                                                    .map(|_| {
-                                                        func(channel, nick, data, &stream, funcs)
-                                                    })
-                                            })
+                                        data.split_once(' ')
+                                            .map(|(head, _)| head)
+                                            .or(Some(data))
+                                            .filter(|head| head == cmd)
+                                            .map(|_| func(channel, nick, data, &stream, funcs))
                                     })
                                     .last()
                                 })
