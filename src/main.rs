@@ -82,74 +82,92 @@ fn main() {
                                 .nth(2)
                                 .and_then(|s| s.strip_prefix(':'))
                                 .and_then(|data| {
-                                    line.split_once('!').and_then(|(head, _)| {
-                                        line.find("PRIVMSG ")
-                                            .and_then(|index| {
-                                                line[index + "PRIVMSG ".len()..]
-                                                    .split_once(' ')
-                                                    .map(|(head, _)| head)
+                                    line.split_once('!')
+                                        .and_then(|(head, _)| {
+                                            line.find("PRIVMSG ")
+                                                .and_then(|index| {
+                                                    line[index + "PRIVMSG ".len()..]
+                                                        .split_once(' ')
+                                                        .map(|(head, _)| head)
+                                                })
+                                                .and_then(|channel| {
+                                                    head.strip_prefix(':')
+                                                        .map(|nick| (nick, channel, data))
+                                                })
+                                        })
+                                        .map(|(nick, channel, data)| {
+                                            [("nick", nick), ("channel", channel), ("input", data)]
+                                                .into_iter()
+                                                .map(|(k, v)| (k, std::borrow::Cow::from(v)))
+                                                .collect::<std::collections::HashMap<
+                                                    &'static str,
+                                                    std::borrow::Cow<'_, str>,
+                                                >>()
+                                        })
+                                })
+                                .map(|obj| {
+                                    (obj, |raw: &str, mut stream: &std::net::TcpStream| {
+                                        std::io::Write::write_all(&mut stream, raw.as_bytes())
+                                            .map(|_| {
+                                                std::io::Write::write_all(&mut stream, b"\r\n")
                                             })
-                                            .and_then(|channel| {
-                                                head.strip_prefix(':')
-                                                    .map(|nick| (nick, channel, data))
-                                            })
+                                            .map(|_| std::io::Write::flush(&mut stream))
+                                            .map(|_| println!(r">> {}\r\n", raw))
+                                            .ok()
+                                            .unwrap_or_default()
                                     })
                                 })
-                                .map(|(nick, channel, data)| {
+                                .map(|(obj, write)| {
                                     (
-                                        nick,
-                                        channel,
-                                        data,
-                                        |raw: &str, mut stream: &std::net::TcpStream| {
-                                            std::io::Write::write_all(&mut stream, raw.as_bytes())
-                                                .map(|_| {
-                                                    std::io::Write::write_all(&mut stream, b"\r\n")
+                                        obj,
+                                        write,
+                                        [
+                                            (
+                                                "raw",
+                                                (|obj, write, stream| {
+                                                    obj.get("raw")
+                                                        .map(|raw| write(raw, stream))
+                                                        .unwrap_or_default()
                                                 })
-                                                .map(|_| std::io::Write::flush(&mut stream))
-                                                .map(|_| println!(r">> {}\r\n", raw))
-                                                .ok()
-                                                .unwrap_or_default()
-                                        },
+                                                    as fn(
+                                                        std::collections::HashMap<
+                                                            &'static str,
+                                                            std::borrow::Cow<'_, str>,
+                                                        >,
+                                                        fn(&str, &std::net::TcpStream),
+                                                        &std::net::TcpStream,
+                                                    ),
+                                            ),
+                                            (
+                                                "say",
+                                                (|obj, write, stream| {
+                                                    write(
+                                                        &*format!(
+                                                            "PRIVMSG {} :{}",
+                                                            obj["channel"], obj["data"]
+                                                        ),
+                                                        stream,
+                                                    )
+                                                }),
+                                            ),
+                                            (
+                                                "reply",
+                                                (|obj, write, stream| {
+                                                    std::iter::once(format!(
+                                                        "PRIVMSG {} :{}: {}",
+                                                        obj["channel"], obj["nick"], obj["data"]
+                                                    ))
+                                                    .map(|data| write(&*data, stream))
+                                                    .last()
+                                                    .unwrap_or_default()
+                                                }),
+                                            ),
+                                        ]
+                                        .into_iter()
+                                        .collect(),
                                     )
                                 })
-                                .map(|(nick, channel, data, write)| {
-                                    (nick, channel, data, write, {
-                                        &[
-                                            (|obj, write, stream| {
-                                                obj.get("raw")
-                                                    .map(|raw| write(raw, stream))
-                                                    .unwrap_or_default()
-                                            })
-                                                as fn(
-                                                    std::collections::HashMap<
-                                                        &'static str,
-                                                        std::borrow::Cow<'_, str>,
-                                                    >,
-                                                    fn(&str, &std::net::TcpStream),
-                                                    &std::net::TcpStream,
-                                                ),
-                                            (|obj, write, stream| {
-                                                write(
-                                                    &*format!(
-                                                        "PRIVMSG {} :{}",
-                                                        obj["channel"], obj["data"]
-                                                    ),
-                                                    stream,
-                                                )
-                                            }),
-                                            (|obj, write, stream| {
-                                                std::iter::once(format!(
-                                                    "PRIVMSG {} :{}: {}",
-                                                    obj["channel"], obj["nick"], obj["data"]
-                                                ))
-                                                .map(|data| write(&*data, stream))
-                                                .last()
-                                                .unwrap_or_default()
-                                            }),
-                                        ]
-                                    })
-                                })
-                                .and_then(|(nick, channel, data, write, funcs)| {
+                                .and_then(|(obj, write, funcs)| {
                                     <&[(
                                         &str,
                                         for<'s> fn(
@@ -159,14 +177,17 @@ fn main() {
                                             >,
                                             &'s std::net::TcpStream,
                                             for<'a, 'b> fn(&'a str, &'b std::net::TcpStream),
-                                            &[fn(
-                                                std::collections::HashMap<
-                                                    &'static str,
-                                                    std::borrow::Cow<'_, str>,
-                                                >,
-                                                fn(&str, &std::net::TcpStream),
-                                                &std::net::TcpStream,
-                                            )],
+                                            &std::collections::HashMap<
+                                                &'static str,
+                                                fn(
+                                                    std::collections::HashMap<
+                                                        &'static str,
+                                                        std::borrow::Cow<'_, str>,
+                                                    >,
+                                                    fn(&str, &std::net::TcpStream),
+                                                    &std::net::TcpStream,
+                                                ),
+                                            >,
                                         ),
                                     )]>::into_iter(&[
                                         (
@@ -178,7 +199,7 @@ fn main() {
                                                 )
                                                 .map(drop)
                                                 .or(Some(()))
-                                                .map(|_| funcs[1](obj, write, stream))
+                                                .map(|_| funcs["say"](obj, write, stream))
                                                 .unwrap_or_default()
                                             }),
                                         ),
@@ -197,7 +218,7 @@ fn main() {
                                                 )
                                                 .map(drop)
                                                 .or(Some(()))
-                                                .map(|_| funcs[2](obj, write, stream))
+                                                .map(|_| funcs["reply"](obj, write, stream))
                                                 .unwrap_or_default()
                                             }),
                                         ),
@@ -211,27 +232,18 @@ fn main() {
                                                 )
                                                 .map(drop)
                                                 .or(Some(()))
-                                                .map(|_| funcs[2](obj, write, stream))
+                                                .map(|_| funcs["reply"](obj, write, stream))
                                                 .unwrap_or_default()
                                             }),
                                         ),
                                     ])
                                     .flat_map(|(cmd, func)| {
-                                        data.split_once(' ')
+                                        obj["input"]
+                                            .split_once(' ')
                                             .map(|(head, _)| head)
-                                            .or(Some(data))
+                                            .or(Some(&*obj["input"]))
                                             .filter(|head| head == cmd)
-                                            .map(|_| {
-                                                [
-                                                    ("channel", channel),
-                                                    ("nick", nick),
-                                                    ("input", data),
-                                                ]
-                                                .into_iter()
-                                                .map(|(k, v)| (k, std::borrow::Cow::from(v)))
-                                                .collect()
-                                            })
-                                            .map(|obj| func(obj, stream, write, funcs))
+                                            .map(|_| func(obj.clone(), stream, write, &funcs))
                                     })
                                     .last()
                                 })
