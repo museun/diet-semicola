@@ -1,11 +1,11 @@
 fn main() {
     std::fs::read_to_string(".env")
         .into_iter()
-        .flat_map(|s| {
+        .filter_map(|s| {
             s.lines()
                 .map(str::trim)
                 .filter(|s| !s.starts_with('#'))
-                .flat_map(|s| s.split_once('=').map(|(k, v)| std::env::set_var(k, v.replace("\"", ""))))
+                .filter_map(|s| s.split_once('=').map(|(k, v)| std::env::set_var(k, v.replace('"', ""))))
                 .last()
         })
         .last()
@@ -17,7 +17,7 @@ fn main() {
                     ("DSC_CHANNEL", Option::<String>::None),
                 ]
                 .into_iter()
-                .flat_map(|(key, mut val)| std::env::var(key).ok().map(|v| val.get_or_insert(v).clone()).map(|v| (key, v)))
+                .flat_map(|(key, mut val)| std::env::var(key).map(|v| val.get_or_insert(v).clone()).map(|v| (key, v)))
                 .collect::<std::collections::HashMap<_, _>>(),
             )
             .next()
@@ -96,7 +96,7 @@ fn main() {
                                                     "int" => val.downcast_ref::<i32>().map(|s| (None, Some(*s), None, None)),
                                                     "bool" => val.downcast_ref::<bool>().map(|s| (None, None, Some(*s), None)),
                                                     "instant" => val.downcast_ref::<std::time::Instant>().map(|s| (None, None, None, Some(*s))),
-                                                    _ => return None,
+                                                    _ => None,
                                                 })
                                             })
                                                 as for<'a> fn(
@@ -228,17 +228,20 @@ fn main() {
                                                                         .map(|(table, time)| {
                                                                             table.iter().map(move |(name, dt)| (name, dt, secs / *dt)).fold(
                                                                                 (time, &mut secs),
-                                                                                move |(mut t, s), (name, dt, div)| match Some(div > 0)
-                                                                                    .filter(|&s| s)
-                                                                                    .map(|_| *s -= dt * div)
-                                                                                    .map(|_| {
-                                                                                        t.push(format!(
-                                                                                            "{} {}",
-                                                                                            div,
-                                                                                            (div > 1).then(|| *name).unwrap_or_else(|| &name[..name.len() - 1])
-                                                                                        ))
-                                                                                    }) {
-                                                                                    _ => (t, s),
+                                                                                move |(mut t, s), (name, dt, div)| {
+                                                                                    Some(t.extend(Some(div > 0).filter(|&s| s).map(|_| *s -= dt * div).map(
+                                                                                        |_| {
+                                                                                            format!(
+                                                                                                "{} {}",
+                                                                                                div,
+                                                                                                (div > 1)
+                                                                                                    .then(|| *name)
+                                                                                                    .unwrap_or_else(|| &name[..name.len() - 1])
+                                                                                            )
+                                                                                        },
+                                                                                    )))
+                                                                                    .map(|_| (t, s))
+                                                                                    .unwrap()
                                                                                 },
                                                                             )
                                                                         })
@@ -247,9 +250,8 @@ fn main() {
                                                                                 .map(|len| {
                                                                                     (len > 1).then(|| {
                                                                                         Some(
-                                                                                            (len > 2).then(|| {
-                                                                                                time.iter_mut().take(len).for_each(|e| e.push_str(","))
-                                                                                            }),
+                                                                                            (len > 2)
+                                                                                                .then(|| time.iter_mut().take(len).for_each(|e| e.push(','))),
                                                                                         )
                                                                                         .map(|_| time.insert(len - 1, "and".into()))
                                                                                     })
@@ -270,11 +272,11 @@ fn main() {
                                             }),
                                         ),
                                     ])
-                                    .flat_map(|(cmd, func)| {
+                                    .filter_map(|(cmd, func)| {
                                         obj["input"]
                                             .split_once(' ')
                                             .map(|(head, _)| head)
-                                            .or(Some(&*obj["input"]))
+                                            .or_else(|| Some(&*obj["input"]))
                                             .filter(|head| head == cmd)
                                             .map(|_| func(obj.clone(), stream, write, (state, get, put), &funcs))
                                     })
@@ -286,7 +288,7 @@ fn main() {
                     .into_iter()
                     .zip(std::iter::repeat(&*line))
                     .map(|(f, s)| f(&*s, &mut state, &stream))
-                    .flat_map(|_| std::io::Write::flush(&mut &stream).ok())
+                    .flat_map(|_| std::io::Write::flush(&mut &stream))
                     .last()
                 })
                 .map(drop)
