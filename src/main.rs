@@ -217,7 +217,51 @@ fn main() {
                                             "!uptime",
                                             (|mut obj, stream, write, (state, get, _put), funcs| match get(state, "uptime", "instant") {
                                                 Some((.., Some(instant))) => obj
-                                                    .insert("data", format!("I've been running for: {:?}", instant.elapsed()).into())
+                                                    .insert(
+                                                        "data",
+                                                        format!(
+                                                            "I've been running for: {}",
+                                                            Some(instant.elapsed().as_secs())
+                                                                .and_then(|mut secs| {
+                                                                    Some([("days", 86400), ("hours", 3600), ("minutes", 60), ("seconds", 1)])
+                                                                        .map(|table| (table, vec![]))
+                                                                        .map(|(table, time)| {
+                                                                            table.iter().map(move |(name, dt)| (name, dt, secs / *dt)).fold(
+                                                                                (time, &mut secs),
+                                                                                move |(mut t, s), (name, dt, div)| match Some(div > 0)
+                                                                                    .filter(|&s| s)
+                                                                                    .map(|_| *s -= dt * div)
+                                                                                    .map(|_| {
+                                                                                        t.push(format!(
+                                                                                            "{} {}",
+                                                                                            div,
+                                                                                            (div > 1).then(|| *name).unwrap_or_else(|| &name[..name.len() - 1])
+                                                                                        ))
+                                                                                    }) {
+                                                                                    _ => (t, s),
+                                                                                },
+                                                                            )
+                                                                        })
+                                                                        .and_then(|(mut time, _)| {
+                                                                            Some(time.len())
+                                                                                .map(|len| {
+                                                                                    (len > 1).then(|| {
+                                                                                        Some(
+                                                                                            (len > 2).then(|| {
+                                                                                                time.iter_mut().take(len).for_each(|e| e.push_str(","))
+                                                                                            }),
+                                                                                        )
+                                                                                        .map(|_| time.insert(len - 1, "and".into()))
+                                                                                    })
+                                                                                })
+                                                                                .map(|_| time)
+                                                                        })
+                                                                        .map(|s| s.join(" "))
+                                                                })
+                                                                .unwrap()
+                                                        )
+                                                        .into(),
+                                                    )
                                                     .map(drop)
                                                     .or(Some(()))
                                                     .map(|_| funcs["reply"](obj, write, stream))
