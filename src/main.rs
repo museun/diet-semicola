@@ -37,19 +37,27 @@ fn main() {
                     .map(|_| stream)
             })
         })
-        .and_then(|stream| {
+        .map(|stream| {
+            (
+                stream,
+                [("uptime", Box::new(std::time::Instant::now()) as Box<dyn std::any::Any>)]
+                    .into_iter()
+                    .collect::<std::collections::HashMap<&'static str, Box<dyn std::any::Any>>>(),
+            )
+        })
+        .and_then(|(stream, mut state)| {
             std::io::BufRead::lines(std::io::BufReader::new(&stream))
                 .flatten()
                 .map(|line| {
                     [
-                        (|line, _stream| println!(r"<< {}\r\n", line)) as fn(&str, &std::net::TcpStream),
-                        (|line, mut stream| {
+                        (|line, _state, _stream| println!(r"<< {}\r\n", line)) as fn(&str, &mut std::collections::HashMap<_, _>, &std::net::TcpStream),
+                        (|line, _state, mut stream| {
                             line.starts_with("PING")
                                 .then(|| std::io::Write::write_all(&mut stream, line.replace("PING", "PONG").as_bytes()))
                                 .map(drop)
                                 .unwrap_or_default()
                         }),
-                        (|line, stream| {
+                        (|line, state, stream| {
                             line.splitn(4, ' ')
                                 .skip_while(|&s| s != "PRIVMSG")
                                 .nth(2)
@@ -81,6 +89,36 @@ fn main() {
                                 .map(|(obj, write)| {
                                     (
                                         obj,
+                                        (
+                                            (move |state, key, totally_static_typing| {
+                                                state.get(key).and_then(|val| match totally_static_typing {
+                                                    "string" => val.downcast_ref::<String>().map(|s| (Some(&**s), None, None, None)),
+                                                    "int" => val.downcast_ref::<i32>().map(|s| (None, Some(*s), None, None)),
+                                                    "bool" => val.downcast_ref::<bool>().map(|s| (None, None, Some(*s), None)),
+                                                    "instant" => val.downcast_ref::<std::time::Instant>().map(|s| (None, None, None, Some(*s))),
+                                                    _ => return None,
+                                                })
+                                            })
+                                                as for<'a> fn(
+                                                    &'a mut std::collections::HashMap<&'static str, Box<dyn std::any::Any>>,
+                                                    key: &'static str,
+                                                    ty: &'static str,
+                                                )
+                                                    -> Option<(Option<&'a str>, Option<i32>, Option<bool>, Option<std::time::Instant>)>,
+                                            (move |state, key, val| state.insert(key, val).map(drop).unwrap_or_default())
+                                                as fn(
+                                                    &mut std::collections::HashMap<&'static str, Box<dyn std::any::Any>>,
+                                                    key: &'static str,
+                                                    val: Box<dyn std::any::Any>,
+                                                ),
+                                        ),
+                                        write,
+                                    )
+                                })
+                                .map(|(obj, state, write)| {
+                                    (
+                                        obj,
+                                        state,
                                         write,
                                         [
                                             (
@@ -110,13 +148,27 @@ fn main() {
                                         .collect(),
                                     )
                                 })
-                                .and_then(|(obj, write, funcs)| {
+                                .and_then(|(obj, (get, put), write, funcs)| {
                                     <&[(
                                         &str,
                                         for<'s> fn(
                                             std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
                                             &'s std::net::TcpStream,
                                             for<'a, 'b> fn(&'a str, &'b std::net::TcpStream),
+                                            (
+                                                &mut std::collections::HashMap<&'static str, Box<dyn std::any::Any>>,
+                                                for<'a> fn(
+                                                    &'a mut std::collections::HashMap<&'static str, Box<dyn std::any::Any>>,
+                                                    key: &'static str,
+                                                    ty: &'static str,
+                                                )
+                                                    -> Option<(Option<&'a str>, Option<i32>, Option<bool>, Option<std::time::Instant>)>,
+                                                fn(
+                                                    &mut std::collections::HashMap<&'static str, Box<dyn std::any::Any>>,
+                                                    key: &'static str,
+                                                    val: Box<dyn std::any::Any>,
+                                                ),
+                                            ),
                                             &std::collections::HashMap<
                                                 &'static str,
                                                 fn(
@@ -129,7 +181,7 @@ fn main() {
                                     )]>::into_iter(&[
                                         (
                                             "!hello",
-                                            (|mut obj, stream, write, funcs| {
+                                            (|mut obj, stream, write, _, funcs| {
                                                 obj.insert("data", format!("hello {}!", obj["nick"]).into())
                                                     .map(drop)
                                                     .or(Some(()))
@@ -139,7 +191,8 @@ fn main() {
                                         ),
                                         (
                                             "!source",
-                                            (|mut obj, stream, write, funcs| {
+                                            (|mut obj, stream, write, _, funcs| {
+                                                // TODO pull this out
                                                 obj.insert(
                                                     "data",
                                                     "you can view this at https://github.com/museun/diet-semicola/blob/main/src/main.rs".into(),
@@ -152,12 +205,24 @@ fn main() {
                                         ),
                                         (
                                             "!project",
-                                            (|mut obj, stream, write, funcs| {
+                                            (|mut obj, stream, write, _, funcs| {
                                                 obj.insert("data", "consider using a semicolon here: `\x3b`".into())
                                                     .map(drop)
                                                     .or(Some(()))
                                                     .map(|_| funcs["reply"](obj, write, stream))
                                                     .unwrap_or_default()
+                                            }),
+                                        ),
+                                        (
+                                            "!uptime",
+                                            (|mut obj, stream, write, (state, get, _put), funcs| match get(state, "uptime", "instant") {
+                                                Some((.., Some(instant))) => obj
+                                                    .insert("data", format!("I've been running for: {:?}", instant.elapsed()).into())
+                                                    .map(drop)
+                                                    .or(Some(()))
+                                                    .map(|_| funcs["reply"](obj, write, stream))
+                                                    .unwrap_or_default(),
+                                                _ => {}
                                             }),
                                         ),
                                     ])
@@ -167,7 +232,7 @@ fn main() {
                                             .map(|(head, _)| head)
                                             .or(Some(&*obj["input"]))
                                             .filter(|head| head == cmd)
-                                            .map(|_| func(obj.clone(), stream, write, &funcs))
+                                            .map(|_| func(obj.clone(), stream, write, (state, get, put), &funcs))
                                     })
                                     .last()
                                 })
@@ -176,7 +241,7 @@ fn main() {
                     ]
                     .into_iter()
                     .zip(std::iter::repeat(&*line))
-                    .map(|(f, s)| f(&*s, &stream))
+                    .map(|(f, s)| f(&*s, &mut state, &stream))
                     .flat_map(|_| std::io::Write::flush(&mut &stream).ok())
                     .last()
                 })
