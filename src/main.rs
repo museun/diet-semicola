@@ -159,12 +159,7 @@ fn main() {
                                             ),
                                             (
                                                 "reply",
-                                                (|obj, write, stream| {
-                                                    std::iter::once(format!("PRIVMSG {} :{}: {}", obj["channel"], obj["nick"], obj["data"]))
-                                                        .map(|data| write(&*data, stream))
-                                                        .last()
-                                                        .unwrap_or_default()
-                                                }),
+                                                (|obj, write, stream| write(&*format!("PRIVMSG {} :{}: {}", obj["channel"], obj["nick"], obj["data"]), stream)),
                                             ),
                                         ]
                                         .into_iter()
