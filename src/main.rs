@@ -89,6 +89,28 @@ fn main() {
                                 .map(|(obj, write)| {
                                     (
                                         obj,
+                                        (move |data, mut map, func, funcs, write, stream| {
+                                            map.insert("data", data)
+                                                .map(drop)
+                                                .or(Some(()))
+                                                .map(|_| funcs[func](map, write, stream))
+                                                .unwrap_or_default()
+                                        })
+                                            as for<'s> fn(
+                                                std::borrow::Cow<'static, str>,
+                                                std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+                                                &'static str,
+                                                &std::collections::HashMap<
+                                                    &'static str,
+                                                    fn(
+                                                        std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+                                                        fn(&str, &std::net::TcpStream),
+                                                        &std::net::TcpStream,
+                                                    ),
+                                                >,
+                                                for<'a, 'b> fn(&'a str, &'b std::net::TcpStream),
+                                                &'s std::net::TcpStream,
+                                            ),
                                         (
                                             (move |state, key, totally_static_typing| {
                                                 state.get(key).and_then(|val| match totally_static_typing {
@@ -115,9 +137,10 @@ fn main() {
                                         write,
                                     )
                                 })
-                                .map(|(obj, state, write)| {
+                                .map(|(obj, update, state, write)| {
                                     (
                                         obj,
+                                        update,
                                         state,
                                         write,
                                         [
@@ -148,11 +171,26 @@ fn main() {
                                         .collect(),
                                     )
                                 })
-                                .and_then(|(obj, (get, put), write, funcs)| {
+                                .and_then(|(obj, update, (get, put), write, funcs)| {
                                     <&[(
                                         &str,
                                         for<'s> fn(
                                             std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+                                            for<'t> fn(
+                                                std::borrow::Cow<'static, str>,
+                                                std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+                                                &'static str,
+                                                &std::collections::HashMap<
+                                                    &'static str,
+                                                    fn(
+                                                        std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+                                                        fn(&str, &std::net::TcpStream),
+                                                        &std::net::TcpStream,
+                                                    ),
+                                                >,
+                                                for<'a, 'b> fn(&'a str, &'b std::net::TcpStream),
+                                                &'t std::net::TcpStream,
+                                            ),
                                             &'s std::net::TcpStream,
                                             for<'a, 'b> fn(&'a str, &'b std::net::TcpStream),
                                             (
@@ -181,41 +219,32 @@ fn main() {
                                     )]>::into_iter(&[
                                         (
                                             "!hello",
-                                            (|mut obj, stream, write, _, funcs| {
-                                                obj.insert("data", format!("hello {}!", obj["nick"]).into())
-                                                    .map(drop)
-                                                    .or(Some(()))
-                                                    .map(|_| funcs["say"](obj, write, stream))
-                                                    .unwrap_or_default()
+                                            (|obj, update, stream, write, _, funcs| {
+                                                update(format!("hello {}!", obj["nick"]).into(), obj, "say", &funcs, write, stream)
                                             }),
                                         ),
                                         (
                                             "!source",
-                                            (|mut obj, stream, write, _, funcs| {
-                                                // TODO pull this out
-                                                obj.insert(
-                                                    "data",
+                                            (|obj, update, stream, write, _, funcs| {
+                                                update(
                                                     "you can view this at https://github.com/museun/diet-semicola/blob/main/src/main.rs".into(),
+                                                    obj,
+                                                    "reply",
+                                                    &funcs,
+                                                    write,
+                                                    stream,
                                                 )
-                                                .map(drop)
-                                                .or(Some(()))
-                                                .map(|_| funcs["reply"](obj, write, stream))
-                                                .unwrap_or_default()
                                             }),
                                         ),
                                         (
                                             "!project",
-                                            (|mut obj, stream, write, _, funcs| {
-                                                obj.insert("data", "consider using a semicolon here: `\x3b`".into())
-                                                    .map(drop)
-                                                    .or(Some(()))
-                                                    .map(|_| funcs["reply"](obj, write, stream))
-                                                    .unwrap_or_default()
+                                            (|obj, update, stream, write, _, funcs| {
+                                                update("consider using a semicolon here: `\x3b`".into(), obj, "reply", &funcs, write, stream)
                                             }),
                                         ),
                                         (
                                             "!uptime",
-                                            (|mut obj, stream, write, (state, get, _put), funcs| match get(state, "uptime", "instant") {
+                                            (|mut obj, _, stream, write, (state, get, _put), funcs| match get(state, "uptime", "instant") {
                                                 Some((.., Some(instant))) => obj
                                                     .insert(
                                                         "data",
@@ -278,7 +307,7 @@ fn main() {
                                             .map(|(head, _)| head)
                                             .or_else(|| Some(&*obj["input"]))
                                             .filter(|head| head == cmd)
-                                            .map(|_| func(obj.clone(), stream, write, (state, get, put), &funcs))
+                                            .map(|_| func(obj.clone(), update, stream, write, (state, get, put), &funcs))
                                     })
                                     .last()
                                 })
